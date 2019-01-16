@@ -44,8 +44,11 @@ class Server
   def initialize ()
     @rank = nil
     @ip = getIp
+    @rankPrincipal = 1
     @connections = Hash.new
     @connections[:servers] = Hash.new
+    @connections[:status] = Hash.new
+    @connections[:timeUltimoPing] = Hash.new
     run
   end
 
@@ -67,8 +70,15 @@ class Server
     listen (socket)
     #constMsg("askrank")
     #publishRank
-    if @rank == 1
+
+    # if @rank == 1
+    if @rank == @rankPrincipal
       actualizar()
+      verificarStatusServers()
+      putOnLine()
+    else
+      putOnLine()
+      verificarStatusPrincipal()
     end
     puts "Servidor Inciado..."
     @response.join
@@ -83,9 +93,65 @@ class Server
         sleep(10)
         hash = {:destino => MULTICAST_ADDR, :content => @connections[:servers].to_json, :type => "actualizar"}.to_json
         send(hash.to_s)
-    }
+        # hash = {:destino => MULTICAST_ADDR, :content => @connections[:status].to_json, :type => "actualizar status"}.to_json
+        # send(hash.to_s)
+        # hash = {:destino => MULTICAST_ADDR, :content => @connections[:timeUltimoPing].to_json, :type => "actualizar timeUltimoPing"}.to_json
+        # send(hash.to_s)
+      }
     end
     puts "hilo actualizar cerrado"
+  end
+
+  def putOnLine ()
+    @onLine = Thread.new do
+      loop{
+        hash = {:rank =>@rank ,:destino => MULTICAST_ADDR, :content => "OnLine", :type => "ping"}.to_json
+        send(hash.to_s)
+        sleep(10)
+      }
+    end
+  end
+
+  def verificarStatusServers ()
+    @status = Thread.new do
+      loop {
+        sleep(10)
+        @connections[:timeUltimoPing].each do |rank,time|
+          if (Time.now - time) > 15
+            @connections[:status][rank]="OffLine"
+          end
+        end
+      }
+    end
+  end
+
+  def sendNuevoCordinador ()
+    hash = {:rank =>@rank ,:destino => MULTICAST_ADDR, :content => "Nuevo Cordinador", :type => "cordinador"}.to_json
+    send(hash.to_s)
+  end
+
+  def verificarStatusPrincipal ()
+    @status = Thread.new do
+      loop {
+        sleep(10)
+        time = @connections[:timeUltimoPing][@rankPrincipal]
+        if (Time.now - time) > 15
+          puts "iniciando eleccion de cordinador"
+          servers = @connections[:status].keys.sort
+          servers.each do |rank|
+            if @connections[:status][rank] == "OnLine" and rank != @rankPrincipal
+              if rank == @rank
+                @connections[:status][@rankPrincipal] = "OffLine"
+                sendNuevoCordinador()
+                actualizar()
+                verificarStatusServers()
+              end
+              break
+            end
+          end
+        end
+      }
+    end
   end
 
   def listen (socket)
@@ -100,20 +166,36 @@ class Server
                 # envio mi rank al nuevo server  BUSCAR SI SE PUEDE MANDAR UN MENSAJE UNICAST
                 sendRank(remote_host)
                 puts @connections
-              elsif data["content"] == "askrank" and @rank == 1
+              # elsif data["content"] == "askrank" and @rank == 1
+              elsif data["content"] == "askrank" and @rank == @rankPrincipal
                   puts "sending rank"
                   rankmax = findrankmax
                   constMsg("turank",rankmax+1)
-                  @connections[:servers][remote_host] = rankmax+1
+                  @connections[:servers][rankmax+1] = remote_host
+                  #@connections[:servers][remote_host] = rankmax+1
                   puts @connections
                   puts "in json #{@connections[:servers].to_json}"
+              elsif data["content"] == "rankPrincipal?" and @rank == @rankPrincipal
+                  constMsg("rankPrincipal",@rankPrincipal)
               elsif data["type"] == "actualizar"
                 @connections[:servers] = JSON.parse(data["content"])
+              # elsif data["type"] == "actualizar status"
+              #   @connections[:status] = JSON.parse(data["content"])
+              # elsif data["type"] == "actualizar timeUltimoPing"
+              #   @connections[:timeUltimoPing] = JSON.parse(data["content"])
                 puts @connections
+              elsif data["type"] == "ping"
+                @connections[:status][data["rank"]]=data["content"]
+                @connections[:timeUltimoPing][data["rank"]] = Time.now
+              elsif data["type"] == "cordinador"
+                @connections[:status][@rankPrincipal] = "OffLine"
+                @rankPrincipal = data["rank"]
+                puts("nuevo coordinador | rank : #{@rankPrincipal}")
               end
             elsif data["destino"] == @ip
               if data["content"] == "mi rank"
-                @connections[:servers][remote_host] = data["rank"]
+                @connections[:servers][data["rank"]] = remote_host
+                # @connections[:servers][remote_host] = data["rank"]
                 puts @connections
               end
 
@@ -171,11 +253,12 @@ class Server
       puts 'aja'
     end
     puts 'finish'
-    
+
   end
 
   def initserver(socket)
     constMsg("askrank","0")
+    constMsg("rankPrincipal?","0")
     begin
       timeout(1) do
           msgcorrect = false
@@ -184,18 +267,23 @@ class Server
             data = JSON.parse(message)
             puts data
             if data["content"] == "turank"
-              msgcorrect = true
+              # msgcorrect = true
               @rank = Integer(data.fetch("rank"))
               puts "ranking reibido: #{@rank}"
+            elsif data["content"] == "rankPrincipal"
+              msgcorrect = true
+              @rankPrincipal = Integer(data.fetch("rank"))
+              puts "rank principal reibido: #{@rankPrincipal}"
             end
           end
       end
     rescue Timeout::Error
       puts "Tiempo expirado, autoasignando ranking..."
       @rank = 1
+      @rankPrincipal = 1
       initsecondserver
       ip = getIp
-      @connections[:servers][ip] = @rank
+      @connections[:servers][@rank] = ip
       puts @connections
     end
   end
@@ -203,10 +291,11 @@ class Server
 
   def findrankmax
     max = 0
-    @connections[:servers].each do |ip,rank|
+    # @connections[:servers].each do |ip,rank|
+    @connections[:servers].each do |rank,ip|
       puts "rank is #{rank}"
-      if max < rank
-        max = rank
+      if max < rank.to_i
+        max = rank.to_i
       end
     end
     return max
@@ -246,11 +335,12 @@ end
 
 class MyApp
   def greet(archivo,nombre)
-    arch = File.open("/home/yonder/Code/proyecto2distribuidos/archivos/#{nombre}",'w')
+    ruta = Dir.getwd
+    arch = File.open("#{ruta}/archivos/#{nombre}","w")
+    # arch = File.open("/home/yonder/Code/proyecto2distribuidos/archivos/#{nombre}",'w')
     IO.write(arch,archivo)
   end
 end
 
 
 Server.new()
-
