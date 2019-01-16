@@ -51,7 +51,7 @@ class Server
   def getIp
     ip = Socket.ip_address_list.detect{|intf| intf.ipv4_private?}
     return ip.ip_address
-  end 
+  end
 
   def run
     socket = UDPSocket.new
@@ -62,7 +62,7 @@ class Server
 
     socket.bind(BIND_ADDR, PORT)
     initserver(socket)
-    
+
     listen (socket)
     #constMsg("askrank")
     #publishRank
@@ -71,7 +71,7 @@ class Server
     end
     puts "Servidor Inciado..."
     @response.join
-  
+
 
   end
 
@@ -82,7 +82,6 @@ class Server
         sleep(10)
         hash = {:destino => MULTICAST_ADDR, :content => @connections[:servers].to_json, :type => "actualizar"}.to_json
         send(hash.to_s)
-      
     }
     end
     puts "hilo actualizar cerrado"
@@ -91,7 +90,6 @@ class Server
   def listen (socket)
     @response = Thread.new do
       loop {
-           
             message, sender = socket.recvfrom(255)
             remote_host = sender[3]
             #puts "mensaje recibido: #{message}, sender is #{sender}"
@@ -117,9 +115,9 @@ class Server
                 @connections[:servers][remote_host] = data["rank"]
                 puts @connections
               end
-           
+
             end
-       
+
           # puts "origen : -#{remote_host}- destino : -#{data["destino"]}- rank : -#{data["rank"]}- sent #{data["content"]}"
       }
     end
@@ -164,7 +162,7 @@ class Server
 
   def initserver(socket)
     constMsg("askrank","0")
-    begin 
+    begin
       timeout(1) do
           msgcorrect = false
           while !msgcorrect
@@ -175,8 +173,8 @@ class Server
               msgcorrect = true
               @rank = Integer(data.fetch("rank"))
               puts "ranking reibido: #{@rank}"
-            end  
-          end  
+            end
+          end
       end
     rescue Timeout::Error
       puts "Tiempo expirado, autoasignando ranking..."
@@ -194,7 +192,7 @@ class Server
       puts "rank is #{rank}"
       if max < rank
         max = rank
-      end  
+      end
     end
     return max
   end
