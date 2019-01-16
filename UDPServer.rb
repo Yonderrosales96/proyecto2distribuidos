@@ -33,6 +33,7 @@ require "socket"
 require "ipaddr"
 require "json"
 require 'timeout'
+require 'drb/drb'
 
 class Server
 
@@ -162,6 +163,19 @@ class Server
   end
 
 
+
+
+  def initsecondserver
+    object = MyApp.new
+    Thread.new do
+      DRb.start_service('druby://localhost:9999', object)
+      DRb.thread.join
+      puts 'aja'
+    end
+    puts 'finish'
+    
+  end
+
   def initserver(socket)
     constMsg("askrank","0")
     begin 
@@ -181,6 +195,7 @@ class Server
     rescue Timeout::Error
       puts "Tiempo expirado, autoasignando ranking..."
       @rank = 1
+      initsecondserver
       ip = getIp
       @connections[:servers][ip] = @rank
       puts @connections
@@ -230,4 +245,14 @@ end
 # hilo.join
 #puts "Ingrese rank del server: "
 #rank = $stdin.gets.chomp
+
+class MyApp
+  def greet(archivo,nombre)
+    arch = File.open("/home/yonder/Code/proyecto2distribuidos/archivos/#{nombre}",'w')
+    IO.write(arch,archivo)
+  end
+end
+
+
 Server.new()
+
