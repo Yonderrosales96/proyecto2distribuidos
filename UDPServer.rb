@@ -291,8 +291,9 @@ class Server
     #transfer = TransferObjects.new
     Thread.new do
       DRb.start_service('druby://localhost:9999', @object)
-      DRb.thread.join
       puts 'jejejejejeje'
+      DRb.thread.join
+      
     end
     puts 'finish'
 
@@ -385,6 +386,7 @@ class MyApp
     @connections = connections
     @archivo = nil
     @transfer = nil
+    @init = false
   end
 
   def act(connections)
@@ -400,22 +402,35 @@ class MyApp
   def greet(archivo,nombre)
     @archivo = archivo
     destino = balanceo(2) #valor de k = 2
-    @transfer = TransferObjects.new(archivo,destino)
-    servicio =DRb.start_service('druby://localhost:9998', @transfer)
-    destino.each do |rank|
+    
+    if !@init
+      @transfer = TransferObjects.new(archivo,destino)
+      servicio =DRb.start_service('druby://localhost:9998', @transfer)
+      @init = true
+    else
+      @transfer.setfile(archivo)
+      @transfer.setrank(destino)    
+    end
+  
+    destinod = Array.new
+    destinod = destino + destinod
+    destinod.each do |rank|
       puts "Enviando a ranks #{rank}"
       @objectServidor.transferir(rank,nombre)
+     
       #registro el file es su rank correspondiente
       @connections[:fileByServer][rank][nombre] = "Size"
+    
     end
+    
     #DRb.start_service('druby://localhost:9998', @transfer)
     #DRb.thread.join
     while !@transfer.ready
 
     end
     puts 'ready'
-    servicio.stop_service
-    DRb.remove_server(servicio)   
+    #servicio.stop_service
+    #DRb.remove_server(servicio)   
     puts 'SERVICIO CERRADO'
     @transfer.clean
   end  
@@ -526,6 +541,12 @@ class TransferObjects
       @ready = false
     end
     return @ready
+  end
+  def setfile(file)
+    @file = file
+  end
+  def setrank(rank)
+    @rank = rank
   end
 end
 

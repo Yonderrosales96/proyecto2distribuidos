@@ -1,5 +1,4 @@
 require 'drb/drb'
-DRb.start_service
 puts 'welcome'
 cerrar = false
 while !cerrar do
