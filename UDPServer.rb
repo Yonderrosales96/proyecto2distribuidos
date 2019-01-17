@@ -255,24 +255,30 @@ class Server
   end
 
   def transferir(rank,nombre)
-    if rank != @rankPrincipal
+    if rank != @rankPrincipal 
+      puts 'first condicion' 
       hash = {:rank =>rank ,:destino => rank, :content => "transfer", :nombre => nombre }.to_json
       send(hash)
     else
+      puts 'second condition'
       archivo = @object.getarchivo()
       ruta = Dir.getwd
       arch = File.open("#{ruta}/archivos/#{nombre}","w")
       IO.write(arch,archivo)
-      @object.gettransfer.primary(@rankPrincipal)
+      @object.gettransfer.primary(@rankPrincipal.to_i)
     end  
       
   end  
   def transferobject(data)
+    puts 'a conectar'
     remote_object = DRbObject.new_with_uri('druby://localhost:9998')
+    puts 'conectado'
     ruta = Dir.getwd
-    archivo = remote_object.transferir(@rank)
+    archivo = remote_object.transferir(@rank.to_i)
+    puts 'archivo obtenido'
     nombre = data["nombre"]
     arch = File.open("#{ruta}/archivos/#{@rank}#{nombre}","w")
+    puts 'ruta'
     IO.write(arch,archivo)
   end  
 
@@ -391,17 +397,21 @@ class MyApp
     @archivo = archivo
     destino = balanceo(2)
     @transfer = TransferObjects.new(archivo,destino)
+    servicio =DRb.start_service('druby://localhost:9998', @transfer)
     destino.each do |rank|
+      puts "Enviando a ranks #{rank}"
       @objectServidor.transferir(rank,nombre)
     end  
-    DRb.start_service('druby://localhost:9998', @transfer)
+    
     #DRb.thread.join
     while !@transfer.ready
           
     end
     puts 'ready'
-    DRb.stop_service()   
+    servicio.stop_service
+    DRb.remove_server(servicio)   
     puts 'SERVICIO CERRADO'
+    @transfer.clean
   end  
     # arch = File.open("/home/yonder/Code/proyecto2distribuidos/archivos/#{nombre}",'w')
     #IO.write(arch,archivo)
@@ -494,14 +504,19 @@ class TransferObjects
     @rank = rank
   end  
   def transferir(rank)
+    puts "antes de borrar #{rank} de  #{@rank}"
     @rank.delete(rank)
+    puts " quedan #{@rank}"
     return @file
   end
   def primary(rank)
+    puts "antes de borrar #{rank} rank #{@rank}"
     @rank.delete(rank)
+    puts "borrando el del servidor quedan #{@rank}"
   end  
   def clean()
     @file = nil
+    @rank = Array.new
   end  
   def ready()
     if @rank.empty?
