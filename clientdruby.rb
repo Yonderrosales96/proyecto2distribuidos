@@ -19,17 +19,19 @@ while !cerrar do
     correcto = false
     while !correcto
         if respuesta == 'S'
-            cerrar = true
+            cerrar = false
             correcto = true
         elsif respuesta == 'N'
-            cerrar = false
+            cerrar = true
             correcto = true
         else 
             puts 'ha introducido un valor incorrecto'
+            puts 'Introduzca S o N'
+            respuesta = gets.chomp
         end     
     end
     rescue DRb::DRbConnError => e
-    puts "excepcion es estaaaa   #{e}"    
+    puts "En estos momentos el servidor no esta en funcionamiento, intente de nuevo mas tarde"    
     end
     
 end 

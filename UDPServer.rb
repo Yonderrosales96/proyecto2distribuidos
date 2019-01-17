@@ -49,6 +49,7 @@ class Server
     @connections[:servers] = Hash.new
     @connections[:status] = Hash.new
     @connections[:timeUltimoPing] = Hash.new
+    @connections[:archivos] = Hash.new
     run
   end
 
@@ -65,6 +66,7 @@ class Server
     socket.setsockopt(:SOL_SOCKET, :SO_REUSEPORT, 1)
 
     socket.bind(BIND_ADDR, PORT)
+    @object = MyApp.new(@connections,self)
     initserver(socket)
 
     listen (socket)
@@ -91,7 +93,8 @@ class Server
     @act = Thread.new do
       loop {
         sleep(10)
-        hash = {:destino => MULTICAST_ADDR, :content => @connections[:servers].to_json, :type => "actualizar"}.to_json
+        hash = {:destino => MULTICAST_ADDR, :content => @connections[:servers].to_json,:content2 => @connections[:archivos].to_json, :type => "actualizar"}.to_json
+        @object.act(@connections)
         send(hash.to_s)
         # hash = {:destino => MULTICAST_ADDR, :content => @connections[:status].to_json, :type => "actualizar status"}.to_json
         # send(hash.to_s)
@@ -172,6 +175,7 @@ class Server
                   rankmax = findrankmax
                   constMsg("turank",rankmax+1)
                   @connections[:servers][rankmax+1] = remote_host
+                  @connections[:archivos][rankmax+1]=0 
                   #@connections[:servers][remote_host] = rankmax+1
                   puts @connections
                   puts "in json #{@connections[:servers].to_json}"
@@ -179,6 +183,7 @@ class Server
                   constMsg("rankPrincipal",@rankPrincipal)
               elsif data["type"] == "actualizar"
                 @connections[:servers] = JSON.parse(data["content"])
+                @connections[:archivos] = JSON.parse(data["content2"])
               # elsif data["type"] == "actualizar status"
               #   @connections[:status] = JSON.parse(data["content"])
               # elsif data["type"] == "actualizar timeUltimoPing"
@@ -191,6 +196,9 @@ class Server
                 @connections[:status][@rankPrincipal] = "OffLine"
                 @rankPrincipal = data["rank"]
                 puts("nuevo coordinador | rank : #{@rankPrincipal}")
+                initsecondserver
+              elsif data["content"] == "transfer" and data["destino"] == @rank
+                transferobject
               end
             elsif data["destino"] == @ip
               if data["content"] == "mi rank"
@@ -198,7 +206,9 @@ class Server
                 # @connections[:servers][remote_host] = data["rank"]
                 puts @connections
               end
-
+            elsif data["destino"] == @rank and data["content"] == "transfer"
+              puts "A esperar data "
+              transferobject(data)
             end
 
           # puts "origen : -#{remote_host}- destino : -#{data["destino"]}- rank : -#{data["rank"]}- sent #{data["content"]}"
@@ -220,6 +230,8 @@ class Server
     #   socket.close
     # end
   end
+  
+  
 
   def sendRank (addr)
     text = '{"rank" : '+@rank+' , "destino" : "'+addr+'" , "content" : "mi rank"}'
@@ -242,15 +254,36 @@ class Server
     end
   end
 
-
+  def transferir(rank,nombre)
+    if rank != @rankPrincipal
+      hash = {:rank =>rank ,:destino => rank, :content => "transfer", :nombre => nombre }.to_json
+      send(hash)
+    else
+      archivo = @object.getarchivo()
+      ruta = Dir.getwd
+      arch = File.open("#{ruta}/archivos/#{nombre}","w")
+      IO.write(arch,archivo)
+      @object.gettransfer.primary(@rankPrincipal)
+    end  
+      
+  end  
+  def transferobject(data)
+    remote_object = DRbObject.new_with_uri('druby://localhost:9998')
+    ruta = Dir.getwd
+    archivo = remote_object.transferir(@rank)
+    nombre = data["nombre"]
+    arch = File.open("#{ruta}/archivos/#{@rank}#{nombre}","w")
+    IO.write(arch,archivo)
+  end  
 
 
   def initsecondserver
-    object = MyApp.new
+    
+    #transfer = TransferObjects.new
     Thread.new do
-      DRb.start_service('druby://localhost:9999', object)
+      DRb.start_service('druby://localhost:9999', @object)
       DRb.thread.join
-      puts 'aja'
+      puts 'jejejejejeje'
     end
     puts 'finish'
 
@@ -284,6 +317,7 @@ class Server
       initsecondserver
       ip = getIp
       @connections[:servers][@rank] = ip
+      @connections[:archivos][@rank.to_s] = 0
       puts @connections
     end
   end
@@ -334,13 +368,152 @@ end
 #rank = $stdin.gets.chomp
 
 class MyApp
+  def initialize(connections,objectServidor)
+    @objectServidor = objectServidor
+    @serversdestino = Array.new
+    @serversdisponible = Array.new
+    @connections = connections
+    @archivo = nil
+    @transfer = nil
+  end
+  
+  def act(connections)
+    @connections = connections
+  end 
+  def getarchivo()
+    return @archivo
+  end  
+
+  def gettransfer()
+    return @transfer
+  end  
   def greet(archivo,nombre)
-    ruta = Dir.getwd
-    arch = File.open("#{ruta}/archivos/#{nombre}","w")
+    @archivo = archivo
+    destino = balanceo(2)
+    @transfer = TransferObjects.new(archivo,destino)
+    destino.each do |rank|
+      @objectServidor.transferir(rank,nombre)
+    end  
+    DRb.start_service('druby://localhost:9998', @transfer)
+    #DRb.thread.join
+    while !@transfer.ready
+          
+    end
+    puts 'ready'
+    DRb.stop_service()   
+    puts 'SERVICIO CERRADO'
+  end  
     # arch = File.open("/home/yonder/Code/proyecto2distribuidos/archivos/#{nombre}",'w')
-    IO.write(arch,archivo)
+    #IO.write(arch,archivo)
+
+
+  def balanceo(k)
+    
+    cant = 0
+    dif = 0
+    @connections[:status].each do |rank,valor|
+      if valor == "OnLine"
+        @serversdisponible.push(rank)
+        cant = cant + 1
+      end  
+    end
+    puts "Servers disponibles #{@serversdisponible}"
+    if cant <= k
+      transferiratodos()
+    else
+      dif = cant - k
+      transferiralgunos(k)
+    end      
+  end
+
+  def transferiratodos
+    @serversdestino = @serversdisponible
+    return @serversdestino
+  end
+
+  def transferiralgunos(k)
+    @serversdestino = Array.new
+    max = 0
+    @connections[:archivos].each do |rank,cantidad|
+      if max < cantidad
+        max = cantidad
+      end
+    end 
+    puts "max = #{max}"
+    
+    while @serversdestino.length < k
+      @servealmacenamiento = @connections[:archivos].sort_by{ |_, v| -v }
+      puts "servealmacenamiento = #{@servealmacenamiento}"
+      @servealmacenamiento.each do |rank, cantidad|
+        puts "serversdisponibles #{@serversdisponible}, servers destino #{@serversdestino}, k = #{k}, rank = #{rank}, cantidad = #{cantidad}"
+        if cantidad < max
+          puts "primera bien"
+        end  
+        serveropen = false
+        @serversdisponible.each do |valor|
+          puts "valor = #{valor} y rank = #{rank}"
+          valor = Integer(valor)
+          rank = Integer(rank)
+          if valor == rank 
+            serveropen = true
+            break
+          end  
+        end  
+        
+       
+        if cantidad < max and serveropen and @serversdestino.length < k
+          @serversdestino.push(rank)
+          puts "Max = #{max} y cantidad = #{cantidad}" 
+        end 
+        
+        if @serversdestino.length < k
+            max = max + 1    
+        end
+        
+      end
+    end
+    puts @serversdestino
+    puts "hash de archivos #{@connections[:archivos]}"
+    @serversdestino.each do |valor|
+      puts "hash #{@connections[:archivos]}"
+      puts "valor #{@connections[:archivos][valor]}"
+      @connections[:archivos][valor.to_s] = @connections[:archivos][valor.to_s] + 1 
+    end  
+
+    puts "todos los servidores son los valores son: #{@servealmacenamiento}"
+    puts "Transferir elementos a #{@serversdestino}"
+    return @serversdestino
   end
 end
 
+class TransferObjects
+ 
+  def initialize(file,rank)
+    @file = file
+    @ready = false
+    @rank = rank
+  end  
+  def transferir(rank)
+    @rank.delete(rank)
+    return @file
+  end
+  def primary(rank)
+    @rank.delete(rank)
+  end  
+  def clean()
+    @file = nil
+  end  
+  def ready()
+    if @rank.empty?
+      @ready= true
+    else   
+      @ready = false
+    end
+    return @ready 
+  end 
+end
 
 Server.new()
+
+
+
