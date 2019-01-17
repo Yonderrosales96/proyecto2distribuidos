@@ -50,6 +50,7 @@ class Server
     @connections[:status] = Hash.new
     @connections[:timeUltimoPing] = Hash.new
     @connections[:archivos] = Hash.new
+    @connections[:fileByServer] = Hash.new
     run
   end
 
@@ -175,7 +176,9 @@ class Server
                   rankmax = findrankmax
                   constMsg("turank",rankmax+1)
                   @connections[:servers][rankmax+1] = remote_host
-                  @connections[:archivos][rankmax+1]=0 
+                  @connections[:archivos][rankmax+1]=0
+                  #creo el hash de files by server
+                  @connections[:fileByServer][rankmax+1]=Hash.new
                   #@connections[:servers][remote_host] = rankmax+1
                   puts @connections
                   puts "in json #{@connections[:servers].to_json}"
@@ -230,8 +233,8 @@ class Server
     #   socket.close
     # end
   end
-  
-  
+
+
 
   def sendRank (addr)
     text = '{"rank" : '+@rank+' , "destino" : "'+addr+'" , "content" : "mi rank"}'
@@ -280,11 +283,11 @@ class Server
     arch = File.open("#{ruta}/archivos/#{@rank}#{nombre}","w")
     puts 'ruta'
     IO.write(arch,archivo)
-  end  
+  end
 
 
   def initsecondserver
-    
+
     #transfer = TransferObjects.new
     Thread.new do
       DRb.start_service('druby://localhost:9999', @object)
@@ -324,6 +327,7 @@ class Server
       ip = getIp
       @connections[:servers][@rank] = ip
       @connections[:archivos][@rank.to_s] = 0
+      @connections[:fileByServer][@rank]=Hash.new
       puts @connections
     end
   end
@@ -382,30 +386,32 @@ class MyApp
     @archivo = nil
     @transfer = nil
   end
-  
+
   def act(connections)
     @connections = connections
-  end 
+  end
   def getarchivo()
     return @archivo
-  end  
+  end
 
   def gettransfer()
     return @transfer
-  end  
+  end
   def greet(archivo,nombre)
     @archivo = archivo
-    destino = balanceo(2)
+    destino = balanceo(2) #valor de k = 2
     @transfer = TransferObjects.new(archivo,destino)
     servicio =DRb.start_service('druby://localhost:9998', @transfer)
     destino.each do |rank|
       puts "Enviando a ranks #{rank}"
       @objectServidor.transferir(rank,nombre)
-    end  
-    
+      #registro el file es su rank correspondiente
+      @connections[:fileByServer][rank][nombre] = "Size"
+    end
+    #DRb.start_service('druby://localhost:9998', @transfer)
     #DRb.thread.join
     while !@transfer.ready
-          
+
     end
     puts 'ready'
     servicio.stop_service
@@ -418,14 +424,13 @@ class MyApp
 
 
   def balanceo(k)
-    
     cant = 0
     dif = 0
     @connections[:status].each do |rank,valor|
       if valor == "OnLine"
         @serversdisponible.push(rank)
         cant = cant + 1
-      end  
+      end
     end
     puts "Servers disponibles #{@serversdisponible}"
     if cant <= k
@@ -433,7 +438,7 @@ class MyApp
     else
       dif = cant - k
       transferiralgunos(k)
-    end      
+    end
   end
 
   def transferiratodos
@@ -448,47 +453,43 @@ class MyApp
       if max < cantidad
         max = cantidad
       end
-    end 
+    end
     puts "max = #{max}"
-    
+
     while @serversdestino.length < k
       @servealmacenamiento = @connections[:archivos].sort_by{ |_, v| -v }
       puts "servealmacenamiento = #{@servealmacenamiento}"
       @servealmacenamiento.each do |rank, cantidad|
         puts "serversdisponibles #{@serversdisponible}, servers destino #{@serversdestino}, k = #{k}, rank = #{rank}, cantidad = #{cantidad}"
-        if cantidad < max
-          puts "primera bien"
-        end  
         serveropen = false
         @serversdisponible.each do |valor|
           puts "valor = #{valor} y rank = #{rank}"
           valor = Integer(valor)
           rank = Integer(rank)
-          if valor == rank 
+          if valor == rank
             serveropen = true
             break
-          end  
-        end  
-        
-       
+          end
+        end
+
         if cantidad < max and serveropen and @serversdestino.length < k
           @serversdestino.push(rank)
-          puts "Max = #{max} y cantidad = #{cantidad}" 
-        end 
-        
-        if @serversdestino.length < k
-            max = max + 1    
+          puts "Max = #{max} y cantidad = #{cantidad}"
         end
-        
+
+        if @serversdestino.length < k
+            max = max + 1
+        end
+
       end
     end
     puts @serversdestino
     puts "hash de archivos #{@connections[:archivos]}"
     @serversdestino.each do |valor|
       puts "hash #{@connections[:archivos]}"
-      puts "valor #{@connections[:archivos][valor]}"
-      @connections[:archivos][valor.to_s] = @connections[:archivos][valor.to_s] + 1 
-    end  
+      puts "valor #{@connections[:archivos][valor.to_s]}"
+      @connections[:archivos][valor.to_s] = @connections[:archivos][valor.to_s] + 1
+    end
 
     puts "todos los servidores son los valores son: #{@servealmacenamiento}"
     puts "Transferir elementos a #{@serversdestino}"
@@ -497,12 +498,12 @@ class MyApp
 end
 
 class TransferObjects
- 
+
   def initialize(file,rank)
     @file = file
     @ready = false
     @rank = rank
-  end  
+  end
   def transferir(rank)
     puts "antes de borrar #{rank} de  #{@rank}"
     @rank.delete(rank)
@@ -521,14 +522,11 @@ class TransferObjects
   def ready()
     if @rank.empty?
       @ready= true
-    else   
+    else
       @ready = false
     end
-    return @ready 
-  end 
+    return @ready
+  end
 end
 
 Server.new()
-
-
-
