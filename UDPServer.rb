@@ -258,20 +258,20 @@ class Server
   end
 
   def transferir(rank,nombre)
-    if rank != @rankPrincipal 
-      puts 'first condicion' 
+    if rank != @rankPrincipal
+      puts 'first condicion'
       hash = {:rank =>rank ,:destino => rank, :content => "transfer", :nombre => nombre }.to_json
       send(hash)
     else
       puts 'second condition'
       archivo = @object.getarchivo()
       ruta = Dir.getwd
-      arch = File.open("#{ruta}/archivos/#{nombre}","w")
+      arch = File.open("#{ruta}/archivos/#{@rank}_#{nombre}","w")
       IO.write(arch,archivo)
       @object.gettransfer.primary(@rankPrincipal.to_i)
-    end  
-      
-  end  
+    end
+
+  end
   def transferobject(data)
     puts 'a conectar'
     remote_object = DRbObject.new_with_uri('druby://localhost:9998')
@@ -280,7 +280,7 @@ class Server
     archivo = remote_object.transferir(@rank.to_i)
     puts 'archivo obtenido'
     nombre = data["nombre"]
-    arch = File.open("#{ruta}/archivos/#{@rank}#{nombre}","w")
+    arch = File.open("#{ruta}/archivos/#{@rank}_#{nombre}","w")
     puts 'ruta'
     IO.write(arch,archivo)
   end
@@ -291,9 +291,8 @@ class Server
     #transfer = TransferObjects.new
     Thread.new do
       DRb.start_service('druby://localhost:9999', @object)
-      puts 'jejejejejeje'
+      puts 'Servicio de escucha cliente iniciado ...'
       DRb.thread.join
-      
     end
     puts 'finish'
 
@@ -320,7 +319,7 @@ class Server
             end
           end
       end
-    rescue Timeout::Error
+      rescue Timeout::Error
       puts "Tiempo expirado, autoasignando ranking..."
       @rank = 1
       @rankPrincipal = 1
@@ -399,7 +398,7 @@ class MyApp
   def gettransfer()
     return @transfer
   end
-  def greet(archivo,nombre)
+  def greet(archivo,nombre,size)
     @archivo = archivo
     destino = balanceo(2) #valor de k = 2
     
@@ -419,7 +418,7 @@ class MyApp
       @objectServidor.transferir(rank,nombre)
      
       #registro el file es su rank correspondiente
-      @connections[:fileByServer][rank][nombre] = "Size"
+      @connections[:fileByServer][rank][nombre] = size
     
     end
     
@@ -433,7 +432,7 @@ class MyApp
     #DRb.remove_server(servicio)   
     puts 'SERVICIO CERRADO'
     @transfer.clean
-  end  
+  end
     # arch = File.open("/home/yonder/Code/proyecto2distribuidos/archivos/#{nombre}",'w')
     #IO.write(arch,archivo)
 
@@ -529,11 +528,11 @@ class TransferObjects
     puts "antes de borrar #{rank} rank #{@rank}"
     @rank.delete(rank)
     puts "borrando el del servidor quedan #{@rank}"
-  end  
+  end
   def clean()
     @file = nil
     @rank = Array.new
-  end  
+  end
   def ready()
     if @rank.empty?
       @ready= true
