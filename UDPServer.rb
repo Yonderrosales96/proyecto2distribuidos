@@ -54,6 +54,9 @@ class Server
     run
   end
 
+  def getmulticast
+    return MULTICAST_ADDR
+  end  
   def getIp
     ip = Socket.ip_address_list.detect{|intf| intf.ipv4_private?}
     return ip.ip_address
@@ -94,9 +97,23 @@ class Server
     @act = Thread.new do
       loop {
         sleep(10)
+       # begin
+        #  puts "ENVIANDO ................ #{@connections[:fileByServer].to_s}"
+        #  puts "ENVIANDO ................ #{@connections[:fileByServer].to_json}"
+        #  puts "ENVIANDO ................ #{@connections[:archivos].to_json}"
+        #  puts "PARSEADO ................ #{JSON.parse(@connections[:fileByServer].to_json,symbolize_keys: true)}"
+       # rescue Exception => e
+       #   puts e 
+       # end    
+      @connections[:fileByServer].each do |rank, files|
+        hash = {:destino => MULTICAST_ADDR, :content => files.to_json, :rank => rank, :type => "filebyserver"  }.to_json
+        send(hash.to_s)
+      end  
         hash = {:destino => MULTICAST_ADDR, :content => @connections[:servers].to_json,:content2 => @connections[:archivos].to_json, :type => "actualizar"}.to_json
+        #puts "hash final #{hash}"
         @object.act(@connections)
         send(hash.to_s)
+       
         # hash = {:destino => MULTICAST_ADDR, :content => @connections[:status].to_json, :type => "actualizar status"}.to_json
         # send(hash.to_s)
         # hash = {:destino => MULTICAST_ADDR, :content => @connections[:timeUltimoPing].to_json, :type => "actualizar timeUltimoPing"}.to_json
@@ -164,7 +181,9 @@ class Server
             message, sender = socket.recvfrom(255)
             remote_host = sender[3]
             #puts "mensaje recibido: #{message}, sender is #{sender}"
+            
             data = JSON.parse(message)
+            #puts "la data es #{data}"
             if (data["destino"]==MULTICAST_ADDR)
               if data["content"] == "mi rank"
                 # envio mi rank al nuevo server  BUSCAR SI SE PUEDE MANDAR UN MENSAJE UNICAST
@@ -187,11 +206,14 @@ class Server
               elsif data["type"] == "actualizar"
                 @connections[:servers] = JSON.parse(data["content"])
                 @connections[:archivos] = JSON.parse(data["content2"])
+                #@connections[:fileByServer] = JSON.parse(data["content3"],symbolize_keys: true)
               # elsif data["type"] == "actualizar status"
               #   @connections[:status] = JSON.parse(data["content"])
               # elsif data["type"] == "actualizar timeUltimoPing"
               #   @connections[:timeUltimoPing] = JSON.parse(data["content"])
                 puts @connections
+              elsif data["type"] == "filebyserver"
+                @connections[:fileByServer][data["rank"]] = JSON.parse(data["content"])  
               elsif data["type"] == "ping"
                 @connections[:status][data["rank"]]=data["content"]
                 @connections[:timeUltimoPing][data["rank"]] = Time.now
@@ -202,6 +224,9 @@ class Server
                 initsecondserver
               elsif data["content"] == "transfer" and data["destino"] == @rank
                 transferobject
+              elsif data["rank"] == @rank and data["type"] == "pull"
+                puts "obteniendo mensaje"
+                sendtopull(data,data["archivo"])
               end
             elsif data["destino"] == @ip
               if data["content"] == "mi rank"
@@ -218,6 +243,22 @@ class Server
       }
     end
   end
+
+  def sendtopull(data,nombrearchivo)
+    puts 'metodo sendtopull'
+    begin
+    port =data["port"]
+    ip = data["content"] 
+    ruta = Dir.getwd
+    puts 'mitad de metodo sendtopull'
+    archivo = IO.read("#{ruta}/archivos/#{nombrearchivo}")
+    remote_object = DRbObject.new_with_uri("druby://#{ip}:#{port}")
+    remote_object.makepull(archivo)
+    rescue Exception => e
+      puts e
+    end  
+    puts 'final metodo sendtopull'
+  end  
 
   def send (msg)
     socket = UDPSocket.open
@@ -398,7 +439,57 @@ class MyApp
   def gettransfer()
     return @transfer
   end
-  def greet(archivo,nombre,size)
+
+  def pull(nombreArch)
+    encontrdo = false
+    rankselected = 0
+    nombrea = ""
+    versionmax = getVersionArch(nombreArch)
+    @connections[:fileByServer].each do |rank,files|
+      files.each do |nombre,version|
+        if nombre == nombreArch and version == versionmax
+          puts "encontrado en rank #{rank} y se llama #{rank}_#{nombre}"
+          rankselected = rank
+          nombrea = nombre
+        end
+      end
+    end
+   
+    #hash = {:rank =>rankselected ,:destino => MULTICAST_ADDR, :content => @objectServidor.getIp, :type => "",:port => "9998"}.to_json
+    begin
+    hash = {:rank =>rankselected ,:destino => @objectServidor.getmulticast, :content => "localhost", :type => "pull",:port => "9998",:archivo => "#{rankselected}_#{nombrea}"}.to_json
+    rescue Exception => e
+      puts e
+    end
+    puts "hash es #{hash}"
+    @objectServidor.send(hash)
+    
+    while !@transfer.pullready()
+      #puts @transfer.pullready()
+    end
+    puts 'archivo recibido'
+    return @transfer.pullfile()  
+  end
+
+  def getVersionArch(nombreArch)
+    encontrdo = false
+    versionMax = 0
+    @connections[:fileByServer].each do |rank,files|
+      files.each do |nombre,version|
+        if nombre == nombreArch and @connections[:status][rank] == "OnLine"
+          if version > versionMax
+            versionMax = version
+            puts "encontrado en rank #{rank} y se llama #{rank}_#{nombreArch} version #{versionMax}"
+          end
+        end
+      end
+    end
+    return versionMax
+  end
+
+
+
+  def commit(archivo,nombre)
     @archivo = archivo
     destino = balanceo(2) #valor de k = 2
     
@@ -413,12 +504,14 @@ class MyApp
   
     destinod = Array.new
     destinod = destino + destinod
+    version = getVersionArch(nombre)+1
     destinod.each do |rank|
       puts "Enviando a ranks #{rank}"
       @objectServidor.transferir(rank,nombre)
      
       #registro el file es su rank correspondiente
-      @connections[:fileByServer][rank][nombre] = size
+     
+      @connections[:fileByServer][rank][nombre] = version
     
     end
     
@@ -457,6 +550,11 @@ class MyApp
 
   def transferiratodos
     @serversdestino = @serversdisponible
+    @serversdestino.each do |valor|
+      puts "hash #{@connections[:archivos]}"
+      puts "valor #{@connections[:archivos][valor.to_s]}"
+      @connections[:archivos][valor.to_s] = @connections[:archivos][valor.to_s] + 1
+    end
     return @serversdestino
   end
 
@@ -488,7 +586,7 @@ class MyApp
 
         if cantidad < max and serveropen and @serversdestino.length < k
           @serversdestino.push(rank)
-          puts "Max = #{max} y cantidad = #{cantidad}"
+          puts "Max = #{max} y cantidad = PULL -a.JPGntidad}"
         end
 
         if @serversdestino.length < k
@@ -517,7 +615,23 @@ class TransferObjects
     @file = file
     @ready = false
     @rank = rank
+    @filetopull = nil
+    @pulready = false
   end
+
+  def makepull(filetopull)
+    @filetopull = filetopull
+    @pulready = true
+    puts "archivo enviado a servidor principal"
+  end  
+
+  def pullready()
+    return @pulready
+  end
+  def pullfile()
+    puts "pullfile realizado"
+    return @filetopull
+  end  
   def transferir(rank)
     puts "antes de borrar #{rank} de  #{@rank}"
     @rank.delete(rank)
